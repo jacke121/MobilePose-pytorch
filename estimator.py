@@ -1,34 +1,50 @@
-'''
-File: estimator.py
-Project: MobilePose
-File Created: Thursday, 8th March 2018 3:02:01 pm
-Author: Yuliang Xiu (yuliangxiu@sjtu.edu.cn)
------
-Last Modified: Thursday, 8th March 2018 3:02:06 pm
-Modified By: Yuliang Xiu (yuliangxiu@sjtu.edu.cn>)
------
-Copyright 2018 - 2018 Shanghai Jiao Tong University, Machine Vision and Intelligence Group
-'''
 
-import itertools
-import logging
-import math
-from collections import namedtuple
+import torch._utils
+
+
+
+from functools import partial
+
 
 import cv2
 import numpy as np
 import torch
 
+import pickle
+
 from scipy.ndimage import maximum_filter, gaussian_filter
 from skimage import io, transform
+from torch import nn
 
 from torch.autograd import Variable
+
+def recursion_change_bn(module):
+    if isinstance(module, torch.nn.BatchNorm2d):
+        module.track_running_stats = 1
+    else:
+        for i, (name, module1) in enumerate(module._modules.items()):
+            module1 = recursion_change_bn(module1)
+    return module
 
 class ResEstimator:
     def __init__(self, graph_path, target_size=(224, 224)):
         self.target_size = target_size
         self.graph_path = graph_path
-        self.net = torch.load(graph_path, map_location=lambda storage, loc: storage)
+
+
+        pickle.load = partial(pickle.load, encoding="latin1")
+        pickle.Unpickler = partial(pickle.Unpickler, encoding="latin1")
+
+        self.net = torch.load(graph_path, map_location=lambda storage, loc: storage,pickle_module=pickle)
+
+        for i, (name, module) in enumerate(self.net._modules.items()):
+            module = recursion_change_bn(self.net)
+
+        self.net.resnet.avgpool = nn.AvgPool2d(kernel_size=1, stride=1, padding=0)
+
+        self.net.resnet.fc = nn.Linear(512, 32)
+        # nn.AdaptiveAvgPool2d((1, 1))
+        self.net.cuda()
         self.net.eval()
 
     def addlayer(self, image):
@@ -60,7 +76,7 @@ class ResEstimator:
         return {'image': image, 'pose_fun': pose_fun}
         
     def rescale(self, image, output_size):
-        image_ = image/256.0
+        image_ = image / 256.0
         h, w = image_.shape[:2]
         im_scale = min(float(output_size[0]) / float(h), float(output_size[1]) / float(w))
         new_h = int(image_.shape[0] * im_scale)
@@ -69,8 +85,11 @@ class ResEstimator:
         left_pad =int( (output_size[1] - new_w) / 2.0)
         top_pad = int((output_size[0] - new_h) / 2.0)
         mean=np.array([0.485, 0.456, 0.406])
-        pad = ((top_pad, top_pad), (left_pad, left_pad))
+        pad = ((top_pad, top_pad+1), (left_pad, left_pad))
         image = np.stack([np.pad(image[:,:,c], pad, mode='constant', constant_values=mean[c])for c in range(3)], axis=2)
+        # cv2.imshow("sdf",image)
+
+        cv2.waitKey()
         pose_fun = lambda x: (((x.reshape([-1,2])-[left_pad, top_pad]) * 1.0 /np.array([new_w, new_h])*np.array([w,h])))
         return {'image': image, 'pose_fun': pose_fun}
 

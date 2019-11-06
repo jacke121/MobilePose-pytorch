@@ -17,7 +17,6 @@ from skimage import io, transform
 import cv2
 
 import torch
-import alog
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -30,7 +29,7 @@ matplotlib.use('Agg')
 
 # import matplotlib.pyplot as plt
 
-def crop_camera(image, ratio=0.15):
+def crop_camera(image, ratio=0.5):
     height = image.shape[0]
     width = image.shape[1]
     mid_width = width / 2.0
