@@ -20,9 +20,11 @@ from math import ceil
 import argparse
 
 import os
+import multiprocessing
 from dataloader import *
 from coco_utils import *
 from networks import *
+from network import CoordRegressionNetwork
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from dataset_factory import DatasetFactory
@@ -30,63 +32,18 @@ from dataset_factory import DatasetFactory
 gpus = [0,1]
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 torch.backends.cudnn.enabled = True
-print(torch.cuda.device_count())
+print("GPU NUM: ", torch.cuda.device_count())
 
-if __name__ == '__main__':
-    
-    parser = argparse.ArgumentParser(description='MobilePose Demo')
-    parser.add_argument('--model', type=str, default="resnet")
-    args = parser.parse_args()
-    modeltype = args.model
-
-    # user defined parameters
-    filename = "final-aug.t7"
-    num_threads = 10
-
-    PATH_PREFIX = "./results/{}".format(modeltype)
-    full_name="./models/{}/{}".format(modeltype, filename)
-    # full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/mobilenetv2_224x224-robust.t7" # Rescale Expansion ToTensor
-    # full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/mobilenetv2_224x224.t7" # Wrap Expansion ToTensor
-    # full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/mobilenetv2_224x224-best.t7" # Wrap Expansion ToTensor
-    # full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/resnet18_227x227-robust.t7" # Rescale Expansion ToTensor
-    # full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/resnet18_227x227.t7" # Rescale Expansion ToTensor
-
-    ROOT_DIR = "../deeppose_tf/datasets/mpii"
-    
-    if modeltype == 'resnet':
-        full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/resnet18_227x227.t7" # Rescale Expansion ToTensor
-        input_size = 227
-      
-        test_dataset = DatasetFactory.get_test_dataset(modeltype, input_size)
-
-    elif modeltype == 'mobilenet':
-        full_name = "/home/yuliang/code/MobilePose-pytorch/models/demo/mobilenetv2_224x224-robust.t7" # Wrap Expansion ToTensor
-        input_size = 224
- 
-        test_dataset = DatasetFactory.get_test_dataset(modeltype, input_size)
-
-    print("Loading testing dataset, wait...")
-
-    test_dataset_size = len(test_dataset)
-
-    test_dataloader = DataLoader(test_dataset, batch_size=test_dataset_size,
-                            shuffle=False, num_workers = num_threads)
-
-    # get all test data
-    all_test_data = {}
-    for i_batch, sample_batched in enumerate(tqdm(test_dataloader)):
-        all_test_data = sample_batched
-        
-    def eval_coco(net_path, result_gt_json_path, result_pred_json_path):
+def eval_coco(all_test_data, modelname, net_path, result_gt_json_path, result_pred_json_path):
         """
         Example:
         eval_coco('/home/yuliang/code/PoseFlow/checkpoint140.t7', 
         'result-gt-json.txt', 'result-pred-json.txt')
         """
         # gpu mode
-        net = Net().cuda()
-        net = torch.load(net_path).cuda()
-        net.eval()
+        net = CoordRegressionNetwork(n_locations=16, backbone=modelname).to(device)
+        net.load_state_dict(torch.load(net_path))
+        net = net.eval()
 
         # cpu mode
         # net = Net()
@@ -120,15 +77,15 @@ if __name__ == '__main__':
             sample_data = {}
 
             # gpu mode
-            sample_data['image'] = all_test_data['image'][bs * (i - 1) : min(bs * i, total_size)].cuda()
+            sample_data['image'] = all_test_data['image'][bs * (i - 1) : min(bs * i, total_size)].to(device)
             # cpu mode
             # sample_data['image'] = all_test_data['image'][100 * (i - 1) : min(100 * i, total_size)]
 
             # t0 = time.time()
-            output = net(Variable(sample_data['image'],volatile=True))
-            # print('FPS is %f'%(1.0/((time.time()-t0)/len(sample_data['image']))))
-
-            transform_to_coco_pred(output, all_coco_pred_annotations_arr, bs * (i - 1))
+            with torch.no_grad():
+                coords, heatmaps = net(sample_data['image'])
+                
+            transform_to_coco_pred(coords.view(-1,16*2), all_coco_pred_annotations_arr, bs * (i - 1))
 
         all_coco_pred_annotations_arr = [item._asdict() for item in all_coco_pred_annotations_arr]
         result_pred_json = json.dumps(all_coco_pred_annotations_arr, cls=MyEncoder)
@@ -143,9 +100,37 @@ if __name__ == '__main__':
         f.write(result_pred_json)
         f.close()
 
+if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(description='MobilePose Demo')
+    parser.add_argument('--model', type=str, required=True, default="")
+    parser.add_argument('--t7', type=str, required=True, default="")
+    parser.add_argument('--gpu', type=str, required=True, default="")
+    args = parser.parse_args()
 
+    modelpath = args.t7
 
-    eval_coco(full_name, os.path.join(PATH_PREFIX, 'result-gt-json.txt'), os.path.join(PATH_PREFIX, 'result-pred-json.txt'))
+    device = torch.device("cuda" if len(args.gpu)>0 else "cpu")
+
+    # user defined parameters
+    num_threads = multiprocessing.cpu_count()
+    PATH_PREFIX = "./results/{}".format(modelpath.split(".")[0])
+
+    input_size = 224
+    modelname = args.model
+
+    test_dataset = DatasetFactory.get_test_dataset("resnet", input_size)
+
+    print("Loading testing dataset, wait...")
+    bs_test = len(test_dataset)
+    test_dataloader = DataLoader(test_dataset, batch_size= bs_test,
+                            shuffle=False, num_workers = num_threads)
+
+    # get all test data
+    all_test_data = {}
+    for i_batch, sample_batched in enumerate(tqdm(test_dataloader)):
+        all_test_data = sample_batched
+        eval_coco(all_test_data, modelname, modelpath, os.path.join(PATH_PREFIX, 'result-gt-json.txt'), os.path.join(PATH_PREFIX, 'result-pred-json.txt'))
 
     # evaluation
     annType = ['segm','bbox','keypoints']

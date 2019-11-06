@@ -13,7 +13,7 @@ Copyright 2018 - 2018 Shanghai Jiao Tong University, Machine Vision and Intellig
 
 from torchvision import models
 import torch.nn as nn
-from mobilenetv2 import *
+# from mobilenetv2 import *
 
 def get_graph_path(model_name):
     return {

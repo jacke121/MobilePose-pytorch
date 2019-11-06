@@ -23,11 +23,10 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms, utils, models
-from torch.autograd import Variable
+
 import matplotlib
 matplotlib.use('Agg')
-
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 def crop_camera(image, ratio=0.5):
     height = image.shape[0]
@@ -37,10 +36,39 @@ def crop_camera(image, ratio=0.5):
     crop_img = image[0:int(height), int(mid_width - width_20):int(mid_width + width_20)]
     return crop_img
 
+def display_pose( img, pose, ids):
+    
+    mean=np.array([0.485, 0.456, 0.406])
+    std=np.array([0.229, 0.224, 0.225])
+    pose  = pose.data.cpu().numpy()
+    img = img.cpu().numpy().transpose(1,2,0)
+    colors = ['g', 'g', 'g', 'g', 'g', 'g', 'm', 'm', 'r', 'r', 'y', 'y', 'y', 'y','y','y']
+    pairs = [[8,9],[11,12],[11,10],[2,1],[1,0],[13,14],[14,15],[3,4],[4,5],[8,7],[7,6],[6,2],[6,3],[8,12],[8,13]]
+    colors_skeleton = ['r', 'y', 'y', 'g', 'g', 'y', 'y', 'g', 'g', 'm', 'm', 'g', 'g', 'y','y']
+    img = np.clip(img*std+mean, 0.0, 1.0)
+    img_width, img_height,_ = img.shape
+    pose = ((pose + 1)* np.array([img_width, img_height])-1)/2 # pose ~ [-1,1]
+
+    plt.subplot(25,4,ids+1)
+    ax = plt.gca()
+    plt.imshow(img)
+    for idx in range(len(colors)):
+        plt.plot(pose[idx,0], pose[idx,1], marker='o', color=colors[idx])
+    for idx in range(len(colors_skeleton)):
+        plt.plot(pose[pairs[idx],0], pose[pairs[idx],1],color=colors_skeleton[idx])
+
+    xmin = np.min(pose[:,0])
+    ymin = np.min(pose[:,1])
+    xmax = np.max(pose[:,0])
+    ymax = np.max(pose[:,1])
+
+    bndbox = np.array(expand_bbox(xmin, xmax, ymin, ymax, img_width, img_height))
+    coords = (bndbox[0], bndbox[1]), bndbox[2]-bndbox[0]+1, bndbox[3]-bndbox[1]+1
+    ax.add_patch(plt.Rectangle(*coords, fill=False, edgecolor='yellow', linewidth=1))
+
 def expand_bbox(left, right, top, bottom, img_width, img_height):
     width = right-left
     height = bottom-top
-    # ratio = np.random.random_sample()*0.2
     ratio = 0.15
     new_left = np.clip(left-ratio*width,0,img_width)
     new_right = np.clip(right+ratio*width,0,img_width)
@@ -58,8 +86,8 @@ class Wrap(object):
         self.output_size = output_size
 
     def __call__(self, sample):
-        image_, pose_ = sample['image']/256.0, sample['pose']
 
+        image_, pose_ = sample['image']/256.0, sample['pose']
         h, w = image_.shape[:2]
         if isinstance(self.output_size, int):
             if h > w:
@@ -72,7 +100,9 @@ class Wrap(object):
         new_h, new_w = int(new_h), int(new_w)
 
         image = transform.resize(image_, (new_w, new_h))
-        pose = (pose_.reshape([-1,2])/np.array([w,h])*np.array([new_w,new_h])).flatten()
+        pose = pose_.reshape([-1,2])/np.array([w,h])
+        pose *= -1.0
+
         return {'image': image, 'pose': pose}
 
 
@@ -103,7 +133,7 @@ class Rescale(object):
                         for c in range(3)], axis=2)
         pose = (pose_.reshape([-1,2])/np.array([w,h])*np.array([new_w,new_h]))
         pose += [left_pad, top_pad]
-        pose = pose.flatten()
+        pose = (pose * 2 + 1) / self.output_size - 1 # pose ~ [-1,1]
 
         return {'image': image, 'pose': pose}
 
@@ -116,8 +146,8 @@ class Expansion(object):
         x = np.arange(0, h)
         y = np.arange(0, w) 
         x, y = np.meshgrid(x, y)
-        x = x[:,:, np.newaxis]
-        y = y[:,:, np.newaxis]
+        x = x[:,:, np.newaxis]/h
+        y = y[:,:, np.newaxis]/w
         image = np.concatenate((image, x, y), axis=2)
         
         return {'image': image,
@@ -131,20 +161,21 @@ class ToTensor(object):
         # guass_heatmap = sample['guass_heatmap']
         h, w = image.shape[:2]
 
-        x_mean = np.mean(image[:,:,3])
-        x_std = np.std(image[:,:,3])
-        y_mean = np.mean(image[:,:,4])
-        y_std = np.std(image[:,:,4])
+        # x_mean = np.mean(image[:,:,3])
+        # x_std = np.std(image[:,:,3])
+        # y_mean = np.mean(image[:,:,4])
+        # y_std = np.std(image[:,:,4])
 
-        mean=np.array([0.485, 0.456, 0.406, x_mean, y_mean])
-        std=np.array([0.229, 0.224, 0.225, x_std, y_std])
+        # mean=np.array([0.485, 0.456, 0.406, x_mean, y_mean])
+        # std=np.array([0.229, 0.224, 0.225, x_std, y_std])
 
-        # mean=np.array([0.485, 0.456, 0.406])
-        # std=np.array([0.229, 0.224, 0.225])
+        mean=np.array([0.485, 0.456, 0.406])
+        std=np.array([0.229, 0.224, 0.225])
 
-        image = (image-mean)/(std)
+        image[:,:,:3] = (image[:,:,:3]-mean)/(std)
         image = torch.from_numpy(image.transpose((2, 0, 1))).float()
         pose = torch.from_numpy(pose).float()
+
 		# todo: support heatmap
 	    # guass_heatmap = torch.from_numpy(guass_heatmap).float()
         return {'image': image,
@@ -156,7 +187,7 @@ class ToTensor(object):
 class PoseDataset(Dataset):
 
     def __init__(self, csv_file, transform):
-        
+        self.root = os.path.dirname(csv_file)
         with open(csv_file) as f:
             self.f_csv = list(csv.reader(f, delimiter='\t'))
         self.transform = transform
@@ -165,9 +196,8 @@ class PoseDataset(Dataset):
         return len(self.f_csv)
         
     def __getitem__(self, idx):
-        ROOT_DIR = "/home/yuliang/code/deeppose_tf/datasets/mpii"
         line = self.f_csv[idx][0].split(",")
-        img_path = os.path.join(ROOT_DIR,'images',line[0])
+        img_path = os.path.join(self.root,'images',line[0])
         image = io.imread(img_path)
         height, width = image.shape[0], image.shape[1]
         pose = np.array([float(item) for item in line[1:]]).reshape([-1,2])
@@ -214,14 +244,54 @@ class Augmentation(object):
     def __call__(self, sample):
         image, pose= sample['image'], sample['pose'].reshape([-1,2])
 
+        sometimes = lambda aug: iaa.Sometimes(0.3, aug)
+
+        seq = iaa.Sequential(
+            [
+                # Apply the following augmenters to most images.
+
+                sometimes(iaa.CropAndPad(percent=(-0.25, 0.25), pad_mode=["edge"], keep_size=False)),
+
+                sometimes(iaa.Affine(
+                    scale={"x": (0.75, 1.25), "y": (0.75, 1.25)},
+                    translate_percent={"x": (-0.25, 0.25), "y": (-0.25, 0.25)},
+                    rotate=(-45, 45),
+                    shear=(-5, 5),
+                    order=[0, 1],
+                    cval=(0, 255),
+                    mode=ia.ALL
+                )),
+
+                iaa.SomeOf((0, 3),
+                    [
+        
+                        iaa.OneOf([
+                            iaa.GaussianBlur((0, 3.0)),
+                            # iaa.AverageBlur(k=(2, 7)),
+                            iaa.MedianBlur(k=(3, 11)),
+                            iaa.MotionBlur(k=5,angle=[-45, 45])
+                        ]),
+
+                        iaa.OneOf([
+                            iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5),
+                            iaa.AdditivePoissonNoise(lam=(0,8), per_channel=True),
+                        ]),
+
+                        iaa.OneOf([
+                            iaa.Add((-10, 10), per_channel=0.5),
+                            iaa.Multiply((0.2, 1.2), per_channel=0.5),
+                            iaa.ContrastNormalization((0.5, 2.0), per_channel=0.5),
+                        ]),
+                    ],
+                    # do all of the above augmentations in random order
+                    random_order=True
+                )
+            ],
+            # do all of the above augmentations in random order
+            random_order=True
+        )
+
         # augmentation choices
-        seq = iaa.SomeOf(2, [
-            iaa.Sometimes(0.4, iaa.Scale((0.5, 1.0))),
-            iaa.Sometimes(0.6, iaa.CropAndPad(percent=(-0.25, 0.25), pad_mode=["edge"], keep_size=False)),
-            iaa.Fliplr(0.1), 
-            iaa.Sometimes(0.4, iaa.AdditiveGaussianNoise(scale=(0, 0.05*50))),
-            iaa.Sometimes(0.1, iaa.GaussianBlur(sigma=(0, 3.0)))
-        ])
         seq_det = seq.to_deterministic()
 
         image_aug = seq_det.augment_images([image])[0]

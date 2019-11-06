@@ -1,6 +1,8 @@
-from dataloader import *
+from dataloader import Rescale, Wrap, PoseDataset, ToTensor, Augmentation, Expansion
+from torchvision import datasets, transforms, utils, models
+import os
 
-ROOT_DIR = "../deeppose_tf/datasets/mpii"  # root dir to the dataset
+ROOT_DIR = "./pose_dataset/mpii"  # root dir to the dataset
 
 DEBUG_MODE = False
 
@@ -10,12 +12,14 @@ def get_transform(modeltype, input_size):
     :param input_size:
     :return:
     """
-    if modeltype == "resnet":
-        return Rescale((input_size, input_size))
-    elif modeltype == "mobilenet":
-        return Wrap((input_size, input_size))
-    else:
-        raise ValueError("modeltype is not wrong")
+    # if "resnet" in modeltype:
+    #     return Rescale((input_size, input_size))
+    # elif "mobilenet" in modeltype:
+    #     return Wrap((input_size, input_size))
+    # else:
+    #     raise ValueError("modeltype is not wrong")
+    return Rescale((input_size, input_size))
+    # return Wrap((input_size, input_size))
 
 
 class DatasetFactory:
@@ -38,11 +42,8 @@ class DatasetFactory:
         return PoseDataset(csv_file=os.path.join(ROOT_DIR, csv_name),
                            transform=transforms.Compose([
                                Augmentation(),
-                               # Rescale((inputsize, inputsize)),  # for resnet18
-                               # # Wrap((inputsize,inputsize)),# for mobilenetv2
                                get_transform(modeltype, input_size),
-                               Expansion(),
-                               # Guass(),
+                            #    Expansion(),
                                ToTensor()
                            ]))
 
@@ -61,10 +62,7 @@ class DatasetFactory:
         return PoseDataset(
             csv_file=os.path.join(ROOT_DIR, csv_name),
             transform=transforms.Compose([
-                # Rescale((inputsize, inputsize)),  # for resnet18
-                # # Wrap((inputsize, inputsize)),# for mobilenetv2
                 get_transform(modeltype, input_size),
-                Expansion(),
-                # Guass(),
+                # Expansion(),
                 ToTensor()
             ]))
